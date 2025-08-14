@@ -8,12 +8,17 @@
 (define-constant err-activity-ended (err u106))
 (define-constant err-already-participated (err u107))
 (define-constant err-activity-not-active (err u108))
+(define-constant err-voting-ended (err u109))
+(define-constant err-already-voted (err u110))
+(define-constant err-insufficient-reputation (err u111))
+(define-constant min-reputation-to-vote u50)
 
 (define-fungible-token civic-token)
 
 (define-data-var next-activity-id uint u1)
 (define-data-var total-participants uint u0)
 (define-data-var contract-balance uint u0)
+(define-data-var voting-period-blocks uint u1440)
 
 (define-map activities
     { activity-id: uint }
@@ -27,6 +32,10 @@
         start-block: uint,
         end-block: uint,
         is-active: bool,
+        approval-status: (string-ascii 10),
+        votes-for: uint,
+        votes-against: uint,
+        voting-end-block: uint,
     }
 )
 
@@ -56,6 +65,17 @@
         participant: principal,
     }
     { participated: bool }
+)
+
+(define-map activity-votes
+    {
+        activity-id: uint,
+        voter: principal,
+    }
+    {
+        vote: bool,
+        block-voted: uint,
+    }
 )
 
 (define-read-only (get-activity (activity-id uint))
@@ -116,8 +136,47 @@
     (match (get-activity activity-id)
         activity (and
             (get is-active activity)
+            (is-eq (get approval-status activity) "approved")
             (>= stacks-block-height (get start-block activity))
             (< stacks-block-height (get end-block activity))
+        )
+        false
+    )
+)
+
+(define-read-only (has-voted
+        (voter principal)
+        (activity-id uint)
+    )
+    (is-some (map-get? activity-votes {
+        activity-id: activity-id,
+        voter: voter,
+    }))
+)
+
+(define-read-only (get-vote-status (activity-id uint))
+    (match (get-activity activity-id)
+        activity
+        {
+            votes-for: (get votes-for activity),
+            votes-against: (get votes-against activity),
+            approval-status: (get approval-status activity),
+            voting-end-block: (get voting-end-block activity),
+        }
+        {
+            votes-for: u0,
+            votes-against: u0,
+            approval-status: "not-found",
+            voting-end-block: u0,
+        }
+    )
+)
+
+(define-read-only (is-voting-active (activity-id uint))
+    (match (get-activity activity-id)
+        activity (and
+            (is-eq (get approval-status activity) "pending")
+            (< stacks-block-height (get voting-end-block activity))
         )
         false
     )
@@ -148,7 +207,11 @@
             creator: tx-sender,
             start-block: start-block,
             end-block: end-block,
-            is-active: true,
+            is-active: false,
+            approval-status: "pending",
+            votes-for: u0,
+            votes-against: u0,
+            voting-end-block: (+ stacks-block-height (var-get voting-period-blocks)),
         })
 
         (var-set next-activity-id (+ activity-id u1))
@@ -263,14 +326,16 @@
     )
 )
 
-(define-public (batch-create-activities (activities-data (list 10
+(define-public (batch-create-activities (activities-data (list
+    10
     {
-    name: (string-ascii 50),
-    description: (string-ascii 200),
-    reward-amount: uint,
-    max-participants: uint,
-    duration-blocks: uint,
-})))
+        name: (string-ascii 50),
+        description: (string-ascii 200),
+        reward-amount: uint,
+        max-participants: uint,
+        duration-blocks: uint,
+    }
+)))
     (begin
         (asserts! (is-eq tx-sender contract-owner) err-owner-only)
         (ok (map create-single-activity activities-data))
@@ -346,5 +411,78 @@
     (begin
         (asserts! (is-eq tx-sender contract-owner) err-owner-only)
         (ok true)
+    )
+)
+
+(define-public (vote-on-activity
+        (activity-id uint)
+        (vote-for bool)
+    )
+    (let (
+            (activity (unwrap! (get-activity activity-id) err-not-found))
+            (voter-stats (get-user-stats tx-sender))
+        )
+        (asserts! (>= (get reputation-score voter-stats) min-reputation-to-vote)
+            err-insufficient-reputation
+        )
+        (asserts! (not (has-voted tx-sender activity-id)) err-already-voted)
+        (asserts! (is-voting-active activity-id) err-voting-ended)
+
+        (map-set activity-votes {
+            activity-id: activity-id,
+            voter: tx-sender,
+        } {
+            vote: vote-for,
+            block-voted: stacks-block-height,
+        })
+
+        (let (
+                (new-votes-for (if vote-for
+                    (+ (get votes-for activity) u1)
+                    (get votes-for activity)
+                ))
+                (new-votes-against (if vote-for
+                    (get votes-against activity)
+                    (+ (get votes-against activity) u1)
+                ))
+            )
+            (map-set activities { activity-id: activity-id }
+                (merge activity {
+                    votes-for: new-votes-for,
+                    votes-against: new-votes-against,
+                })
+            )
+        )
+        (ok true)
+    )
+)
+
+(define-public (finalize-voting (activity-id uint))
+    (let (
+            (activity (unwrap! (get-activity activity-id) err-not-found))
+            (votes-for (get votes-for activity))
+            (votes-against (get votes-against activity))
+            (total-votes (+ votes-for votes-against))
+        )
+        (asserts! (not (is-voting-active activity-id)) err-voting-ended)
+        (asserts! (is-eq (get approval-status activity) "pending")
+            err-already-exists
+        )
+
+        (let (
+                (approval-threshold (/ total-votes u2))
+                (is-approved (> votes-for approval-threshold))
+            )
+            (map-set activities { activity-id: activity-id }
+                (merge activity {
+                    approval-status: (if is-approved
+                        "approved"
+                        "rejected"
+                    ),
+                    is-active: is-approved,
+                })
+            )
+            (ok is-approved)
+        )
     )
 )
