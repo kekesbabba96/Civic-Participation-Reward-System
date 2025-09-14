@@ -11,7 +11,12 @@
 (define-constant err-voting-ended (err u109))
 (define-constant err-already-voted (err u110))
 (define-constant err-insufficient-reputation (err u111))
+(define-constant err-milestone-not-found (err u112))
+(define-constant err-milestone-already-completed (err u113))
+(define-constant err-invalid-milestone-order (err u114))
+(define-constant err-milestone-requirements-not-met (err u115))
 (define-constant min-reputation-to-vote u50)
+(define-constant max-milestones-per-activity u5)
 
 (define-fungible-token civic-token)
 
@@ -76,6 +81,38 @@
         vote: bool,
         block-voted: uint,
     }
+)
+
+(define-map activity-milestones
+    {
+        activity-id: uint,
+        milestone-id: uint,
+    }
+    {
+        name: (string-ascii 50),
+        description: (string-ascii 100),
+        reward-amount: uint,
+        required-blocks-elapsed: uint,
+        is-final: bool,
+    }
+)
+
+(define-map user-milestone-progress
+    {
+        user: principal,
+        activity-id: uint,
+        milestone-id: uint,
+    }
+    {
+        completed: bool,
+        completion-block: uint,
+        reward-claimed: bool,
+    }
+)
+
+(define-map activity-milestone-count
+    { activity-id: uint }
+    { count: uint }
 )
 
 (define-read-only (get-activity (activity-id uint))
@@ -180,6 +217,75 @@
         )
         false
     )
+)
+
+(define-read-only (get-milestone
+        (activity-id uint)
+        (milestone-id uint)
+    )
+    (map-get? activity-milestones {
+        activity-id: activity-id,
+        milestone-id: milestone-id,
+    })
+)
+
+(define-read-only (get-user-milestone-progress
+        (user principal)
+        (activity-id uint)
+        (milestone-id uint)
+    )
+    (map-get? user-milestone-progress {
+        user: user,
+        activity-id: activity-id,
+        milestone-id: milestone-id,
+    })
+)
+
+(define-read-only (get-activity-milestone-count (activity-id uint))
+    (default-to u0
+        (get count
+            (map-get? activity-milestone-count { activity-id: activity-id })
+        ))
+)
+
+(define-read-only (is-milestone-available
+        (user principal)
+        (activity-id uint)
+        (milestone-id uint)
+    )
+    (let (
+            (milestone (map-get? activity-milestones {
+                activity-id: activity-id,
+                milestone-id: milestone-id,
+            }))
+            (user-participation (get-participation user activity-id))
+        )
+        (match milestone
+            milestone-data (match user-participation
+                participation-data (let (
+                        (blocks-since-participation (- stacks-block-height
+                            (get block-participated participation-data)
+                        ))
+                        (required-blocks (get required-blocks-elapsed milestone-data))
+                    )
+                    (>= blocks-since-participation required-blocks)
+                )
+                false
+            )
+            false
+        )
+    )
+)
+
+(define-read-only (has-completed-milestone
+        (user principal)
+        (activity-id uint)
+        (milestone-id uint)
+    )
+    (default-to false
+        (get completed
+            (get-user-milestone-progress user activity-id milestone-id)
+        ))
 )
 
 (define-public (create-activity
@@ -484,5 +590,110 @@
             )
             (ok is-approved)
         )
+    )
+)
+
+(define-public (create-milestone
+        (activity-id uint)
+        (name (string-ascii 50))
+        (description (string-ascii 100))
+        (reward-amount uint)
+        (required-blocks-elapsed uint)
+        (is-final bool)
+    )
+    (let (
+            (activity (unwrap! (get-activity activity-id) err-not-found))
+            (current-milestone-count (get-activity-milestone-count activity-id))
+            (new-milestone-id (+ current-milestone-count u1))
+        )
+        (asserts! (is-eq tx-sender (get creator activity)) err-unauthorized)
+        (asserts! (< current-milestone-count max-milestones-per-activity)
+            err-invalid-amount
+        )
+        (asserts! (> reward-amount u0) err-invalid-amount)
+
+        (map-set activity-milestones {
+            activity-id: activity-id,
+            milestone-id: new-milestone-id,
+        } {
+            name: name,
+            description: description,
+            reward-amount: reward-amount,
+            required-blocks-elapsed: required-blocks-elapsed,
+            is-final: is-final,
+        })
+
+        (map-set activity-milestone-count { activity-id: activity-id } { count: new-milestone-id })
+        (ok new-milestone-id)
+    )
+)
+
+(define-public (complete-milestone
+        (activity-id uint)
+        (milestone-id uint)
+    )
+    (let (
+            (milestone (unwrap! (get-milestone activity-id milestone-id)
+                err-milestone-not-found
+            ))
+            (activity (unwrap! (get-activity activity-id) err-not-found))
+            (user-participation (unwrap! (get-participation tx-sender activity-id) err-not-found))
+        )
+        (asserts! (is-activity-active activity-id) err-activity-not-active)
+        (asserts!
+            (not (has-completed-milestone tx-sender activity-id milestone-id))
+            err-milestone-already-completed
+        )
+        (asserts! (is-milestone-available tx-sender activity-id milestone-id)
+            err-milestone-requirements-not-met
+        )
+
+        (map-set user-milestone-progress {
+            user: tx-sender,
+            activity-id: activity-id,
+            milestone-id: milestone-id,
+        } {
+            completed: true,
+            completion-block: stacks-block-height,
+            reward-claimed: false,
+        })
+        (ok true)
+    )
+)
+
+(define-public (claim-milestone-reward
+        (activity-id uint)
+        (milestone-id uint)
+    )
+    (let (
+            (milestone (unwrap! (get-milestone activity-id milestone-id)
+                err-milestone-not-found
+            ))
+            (progress (unwrap!
+                (get-user-milestone-progress tx-sender activity-id milestone-id)
+                err-not-found
+            ))
+            (reward-amount (get reward-amount milestone))
+            (user-current-stats (get-user-stats tx-sender))
+        )
+        (asserts! (get completed progress) err-milestone-requirements-not-met)
+        (asserts! (not (get reward-claimed progress)) err-already-exists)
+
+        (try! (ft-mint? civic-token reward-amount tx-sender))
+
+        (map-set user-milestone-progress {
+            user: tx-sender,
+            activity-id: activity-id,
+            milestone-id: milestone-id,
+        }
+            (merge progress { reward-claimed: true })
+        )
+
+        (map-set user-stats { user: tx-sender } {
+            total-activities: (get total-activities user-current-stats),
+            total-rewards: (+ (get total-rewards user-current-stats) reward-amount),
+            reputation-score: (+ (get reputation-score user-current-stats) u5),
+        })
+        (ok reward-amount)
     )
 )
