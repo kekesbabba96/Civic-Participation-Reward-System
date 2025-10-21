@@ -15,6 +15,10 @@
 (define-constant err-milestone-already-completed (err u113))
 (define-constant err-invalid-milestone-order (err u114))
 (define-constant err-milestone-requirements-not-met (err u115))
+(define-constant err-announcement-not-found (err u116))
+(define-constant err-announcement-expired (err u117))
+(define-constant err-invalid-category (err u118))
+(define-constant err-not-authorized-creator (err u119))
 (define-constant min-reputation-to-vote u50)
 (define-constant max-milestones-per-activity u5)
 
@@ -24,6 +28,7 @@
 (define-data-var total-participants uint u0)
 (define-data-var contract-balance uint u0)
 (define-data-var voting-period-blocks uint u1440)
+(define-data-var next-announcement-id uint u1)
 
 (define-map activities
     { activity-id: uint }
@@ -113,6 +118,24 @@
 (define-map activity-milestone-count
     { activity-id: uint }
     { count: uint }
+)
+
+(define-map announcements
+    { announcement-id: uint }
+    {
+        title: (string-ascii 100),
+        content: (string-ascii 500),
+        category: (string-ascii 30),
+        creator: principal,
+        created-at: uint,
+        expiry-block: uint,
+        is-active: bool,
+    }
+)
+
+(define-map authorized-announcers
+    { user: principal }
+    { authorized: bool }
 )
 
 (define-read-only (get-activity (activity-id uint))
@@ -286,6 +309,52 @@
         (get completed
             (get-user-milestone-progress user activity-id milestone-id)
         ))
+)
+
+(define-read-only (get-announcement (announcement-id uint))
+    (map-get? announcements { announcement-id: announcement-id })
+)
+
+(define-read-only (get-next-announcement-id)
+    (var-get next-announcement-id)
+)
+
+(define-read-only (is-authorized-announcer (user principal))
+    (or
+        (is-eq user contract-owner)
+        (default-to false
+            (get authorized
+                (map-get? authorized-announcers { user: user })
+            )
+        )
+    )
+)
+
+(define-read-only (is-announcement-active (announcement-id uint))
+    (match (get-announcement announcement-id)
+        announcement (and
+            (get is-active announcement)
+            (< stacks-block-height (get expiry-block announcement))
+        )
+        false
+    )
+)
+
+(define-read-only (get-announcement-with-status (announcement-id uint))
+    (match (get-announcement announcement-id)
+        announcement
+        (some {
+            title: (get title announcement),
+            content: (get content announcement),
+            category: (get category announcement),
+            creator: (get creator announcement),
+            created-at: (get created-at announcement),
+            expiry-block: (get expiry-block announcement),
+            is-active: (get is-active announcement),
+            is-expired: (>= stacks-block-height (get expiry-block announcement)),
+        })
+        none
+    )
 )
 
 (define-public (create-activity
@@ -695,5 +764,98 @@
             reputation-score: (+ (get reputation-score user-current-stats) u5),
         })
         (ok reward-amount)
+    )
+)
+
+(define-public (authorize-announcer (user principal))
+    (begin
+        (asserts! (is-eq tx-sender contract-owner) err-owner-only)
+        (map-set authorized-announcers { user: user } { authorized: true })
+        (ok true)
+    )
+)
+
+(define-public (revoke-announcer (user principal))
+    (begin
+        (asserts! (is-eq tx-sender contract-owner) err-owner-only)
+        (map-set authorized-announcers { user: user } { authorized: false })
+        (ok true)
+    )
+)
+
+(define-public (create-announcement
+        (title (string-ascii 100))
+        (content (string-ascii 500))
+        (category (string-ascii 30))
+        (duration-blocks uint)
+    )
+    (let (
+            (announcement-id (var-get next-announcement-id))
+            (expiry-block (+ stacks-block-height duration-blocks))
+        )
+        (asserts! (is-authorized-announcer tx-sender) err-not-authorized-creator)
+        (asserts! (> duration-blocks u0) err-invalid-amount)
+        (asserts! (> (len title) u0) err-invalid-amount)
+        (asserts! (> (len content) u0) err-invalid-amount)
+        (asserts! (> (len category) u0) err-invalid-category)
+
+        (map-set announcements { announcement-id: announcement-id } {
+            title: title,
+            content: content,
+            category: category,
+            creator: tx-sender,
+            created-at: stacks-block-height,
+            expiry-block: expiry-block,
+            is-active: true,
+        })
+
+        (var-set next-announcement-id (+ announcement-id u1))
+        (ok announcement-id)
+    )
+)
+
+(define-public (update-announcement
+        (announcement-id uint)
+        (title (string-ascii 100))
+        (content (string-ascii 500))
+        (category (string-ascii 30))
+    )
+    (let (
+            (announcement (unwrap! (get-announcement announcement-id) err-announcement-not-found))
+        )
+        (asserts! (is-eq tx-sender (get creator announcement)) err-unauthorized)
+        (asserts! (get is-active announcement) err-announcement-expired)
+        (asserts! (< stacks-block-height (get expiry-block announcement)) err-announcement-expired)
+        (asserts! (> (len title) u0) err-invalid-amount)
+        (asserts! (> (len content) u0) err-invalid-amount)
+        (asserts! (> (len category) u0) err-invalid-category)
+
+        (map-set announcements { announcement-id: announcement-id }
+            (merge announcement {
+                title: title,
+                content: content,
+                category: category,
+            })
+        )
+        (ok true)
+    )
+)
+
+(define-public (deactivate-announcement (announcement-id uint))
+    (let (
+            (announcement (unwrap! (get-announcement announcement-id) err-announcement-not-found))
+        )
+        (asserts! 
+            (or
+                (is-eq tx-sender (get creator announcement))
+                (is-eq tx-sender contract-owner)
+            )
+            err-unauthorized
+        )
+
+        (map-set announcements { announcement-id: announcement-id }
+            (merge announcement { is-active: false })
+        )
+        (ok true)
     )
 )
