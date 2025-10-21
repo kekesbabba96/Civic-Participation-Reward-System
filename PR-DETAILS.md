@@ -1,39 +1,37 @@
-# Community Announcements System
+# Community Achievement Badge System
 
 ## Overview
-Independent smart contract feature enabling authorized users to create, manage, and display community-wide announcements. Supports categorization, expiration dates, and flexible retrieval options to enhance community engagement and information dissemination.
+Adds an independent, Clarity v3 compliant Community Achievement Badge System enabling on-chain badge definitions, progress tracking, eligibility verification, user badge collections, and badge statistics. The feature is fully independent of existing voting or milestone systems and introduces administrative tools to manage badges.
 
 ## Technical Implementation
-**Key Functions Added:**
-- `create-announcement`: Create new announcements with title, content, category, and expiration
-- `get-announcement`: Retrieve specific announcements by ID
-- `get-announcement-with-status`: Retrieve announcements with expiration status
-- `is-announcement-active`: Check if announcement is currently active
-- `update-announcement`: Modify existing announcements (creator-only)
-- `deactivate-announcement`: Deactivate announcements (creator or owner)
-- `authorize-announcer`: Grant announcement creation privileges (owner-only)
-- `revoke-announcer`: Revoke announcement creation privileges (owner-only)
-- `is-authorized-announcer`: Check user authorization status
+**New Data Maps and Variables:**
+- `next-badge-id`, `badges`, `badge-earned-count`
+- `user-progress`, `user-badges`, `user-badge-count`, `user-badge-index`
+- `badge-admins` map with admin authorization enforcement
 
-**Data Structures:**
-- Announcement map with fields: id, title, content, category, creator, timestamp, expiration-date, is-active
-- Authorization map for announcement creators
-- Sequential ID tracking with next-announcement-id variable
+**Public and Read-Only Functions:**
+- Admin management: `add-badge-admin`, `remove-badge-admin`, `is-badge-admin`
+- Badge CRUD: `create-badge`, `update-badge`, `set-badge-active`
+- Progress tracking: `record-progress`, `set-progress`
+- Badge claiming: `can-earn-badge`, `claim-badge`, `has-badge`
+- Data retrieval: `get-badge`, `get-badges-page`, `get-user-badge-at-index`, `get-badge-stats`
 
-**Security Features:**
-- Creator authorization validation (owner or authorized users)
-- Ownership verification for updates and deactivation
-- Expiration date enforcement with block-height validation
-- Input validation with comprehensive error codes (u116-u119)
-- Proper access control for administrative functions
+**Error Codes:**
+- `u120` unauthorized, `u121` badge not found, `u122` inactive, `u123` already earned, `u124` requirement not met, `u125` invalid arg, `u126` overflow
+
+**Key Features:**
+- No cross-contract calls or traits - completely independent
+- Clarity v3 `string-utf8` types with explicit max lengths
+- Comprehensive admin authorization system
+- Progress tracking with overflow protection
+- Badge ownership verification and claiming logic
 
 ## Testing & Validation
-- ✅ Contract passes clarinet check
-- ✅ All npm tests successful (3/3 tests passing)
-- ✅ CI/CD pipeline configured
-- ✅ Clarity v3 compliant with proper error handling
-- ✅ Independent feature with no cross-contract dependencies
-- ✅ Line endings normalized (LF)
+- ? Contract passes `clarinet check` with warnings only (no errors)
+- ? Core badge functionality validated through npm tests
+- ? CI/CD pipeline configured with exact workflow specification
+- ? All modified files normalized to LF line endings
+- ? Error codes u120+ used exclusively for badge system
 
 ## Value Proposition
-Provides a decentralized, transparent announcement system that empowers community governance and information sharing without external dependencies. Enhances the existing civic participation platform with real-time communication capabilities.
+Provides a decentralized, on-chain achievement system that enhances community engagement through gamification. Users can earn verifiable badges for participation milestones, creating incentives for sustained civic involvement while maintaining full transparency and independence from existing contract systems.

@@ -859,3 +859,298 @@
         (ok true)
     )
 )
+
+;; ===============================================================================
+;; COMMUNITY ACHIEVEMENT BADGE SYSTEM
+;; Independent feature for on-chain badge management, progress tracking, and rewards
+;; ===============================================================================
+
+;; Badge System Error Constants (u120+)
+(define-constant err-badge-unauthorized (err u120))
+(define-constant err-badge-not-found (err u121))
+(define-constant err-badge-inactive (err u122))
+(define-constant err-badge-already-earned (err u123))
+(define-constant err-badge-requirement-not-met (err u124))
+(define-constant err-badge-invalid-arg (err u125))
+(define-constant err-badge-overflow (err u126))
+
+;; Badge System Data Variables
+(define-data-var next-badge-id uint u1)
+
+;; Badge System Maps
+(define-map badges
+    { badge-id: uint }
+    {
+        name: (string-utf8 64),
+        description: (string-utf8 256),
+        requirement-key: (string-utf8 32),
+        threshold: uint,
+        active: bool,
+    }
+)
+
+(define-map badge-earned-count
+    { badge-id: uint }
+    { count: uint }
+)
+
+(define-map user-progress
+    {
+        user: principal,
+        requirement-key: (string-utf8 32),
+    }
+    { progress: uint }
+)
+
+(define-map user-badges
+    {
+        user: principal,
+        badge-id: uint,
+    }
+    { earned: bool }
+)
+
+(define-map user-badge-count
+    { user: principal }
+    { count: uint }
+)
+
+(define-map user-badge-index
+    {
+        user: principal,
+        index: uint,
+    }
+    { badge-id: uint }
+)
+
+(define-map badge-admins
+    { user: principal }
+    { authorized: bool }
+)
+
+;; Badge System Read-Only Functions
+(define-read-only (is-badge-admin (user principal))
+    (or
+        (is-eq user contract-owner)
+        (default-to false
+            (get authorized
+                (map-get? badge-admins { user: user })
+            )
+        )
+    )
+)
+
+(define-read-only (get-badge (badge-id uint))
+    (map-get? badges { badge-id: badge-id })
+)
+
+(define-read-only (has-badge (user principal) (badge-id uint))
+    (default-to false
+        (get earned
+            (map-get? user-badges {
+                user: user,
+                badge-id: badge-id,
+            })
+        ))
+)
+
+(define-read-only (can-earn-badge (user principal) (badge-id uint))
+    (match (get-badge badge-id)
+        badge
+        (let (
+                (user-prog (default-to u0
+                    (get progress
+                        (map-get? user-progress {
+                            user: user,
+                            requirement-key: (get requirement-key badge),
+                        })
+                    )
+                ))
+            )
+            (and
+                (get active badge)
+                (>= user-prog (get threshold badge))
+                (not (has-badge user badge-id))
+            )
+        )
+        false
+    )
+)
+
+(define-read-only (get-badge-stats)
+    {
+        total-badges: (- (var-get next-badge-id) u1),
+    }
+)
+
+(define-read-only (get-badges-page (start-id uint) (limit uint))
+    (if (< start-id (var-get next-badge-id))
+        (get-badge start-id)
+        none
+    )
+)
+
+(define-read-only (get-user-badge-at-index (user principal) (index uint))
+    (map-get? user-badge-index {
+        user: user,
+        index: index,
+    })
+)
+
+;; Badge System Public Functions
+(define-public (add-badge-admin (admin principal))
+    (begin
+        (asserts! (is-badge-admin tx-sender) err-badge-unauthorized)
+        (map-set badge-admins { user: admin } { authorized: true })
+        (ok true)
+    )
+)
+
+(define-public (remove-badge-admin (admin principal))
+    (begin
+        (asserts! (is-badge-admin tx-sender) err-badge-unauthorized)
+        (map-set badge-admins { user: admin } { authorized: false })
+        (ok true)
+    )
+)
+
+(define-public (create-badge
+        (name (string-utf8 64))
+        (description (string-utf8 256))
+        (requirement-key (string-utf8 32))
+        (threshold uint)
+    )
+    (let (
+            (badge-id (var-get next-badge-id))
+        )
+        (asserts! (is-badge-admin tx-sender) err-badge-unauthorized)
+        (asserts! (> (len name) u0) err-badge-invalid-arg)
+        (asserts! (> (len requirement-key) u0) err-badge-invalid-arg)
+
+        (map-set badges { badge-id: badge-id } {
+            name: name,
+            description: description,
+            requirement-key: requirement-key,
+            threshold: threshold,
+            active: true,
+        })
+
+        (map-set badge-earned-count { badge-id: badge-id } { count: u0 })
+        (var-set next-badge-id (+ badge-id u1))
+        (ok badge-id)
+    )
+)
+
+(define-public (update-badge
+        (badge-id uint)
+        (name (optional (string-utf8 64)))
+        (description (optional (string-utf8 256)))
+        (requirement-key (optional (string-utf8 32)))
+        (threshold (optional uint))
+        (active (optional bool))
+    )
+    (let (
+            (existing-badge (unwrap! (get-badge badge-id) err-badge-not-found))
+        )
+        (asserts! (is-badge-admin tx-sender) err-badge-unauthorized)
+
+        (map-set badges { badge-id: badge-id } {
+            name: (default-to (get name existing-badge) name),
+            description: (default-to (get description existing-badge) description),
+            requirement-key: (default-to (get requirement-key existing-badge) requirement-key),
+            threshold: (default-to (get threshold existing-badge) threshold),
+            active: (default-to (get active existing-badge) active),
+        })
+        (ok true)
+    )
+)
+
+(define-public (set-badge-active (badge-id uint) (active bool))
+    (let (
+            (existing-badge (unwrap! (get-badge badge-id) err-badge-not-found))
+        )
+        (asserts! (is-badge-admin tx-sender) err-badge-unauthorized)
+        (map-set badges { badge-id: badge-id }
+            (merge existing-badge { active: active })
+        )
+        (ok true)
+    )
+)
+
+(define-public (record-progress
+        (user principal)
+        (requirement-key (string-utf8 32))
+        (delta uint)
+    )
+    (let (
+            (current-progress (default-to u0
+                (get progress
+                    (map-get? user-progress {
+                        user: user,
+                        requirement-key: requirement-key,
+                    })
+                )
+            ))
+            (new-progress (+ current-progress delta))
+        )
+        (asserts! (is-badge-admin tx-sender) err-badge-unauthorized)
+        (asserts! (>= new-progress current-progress) err-badge-overflow)
+
+        (map-set user-progress {
+            user: user,
+            requirement-key: requirement-key,
+        } { progress: new-progress })
+        (ok new-progress)
+    )
+)
+
+(define-public (set-progress
+        (user principal)
+        (requirement-key (string-utf8 32))
+        (value uint)
+    )
+    (begin
+        (asserts! (is-badge-admin tx-sender) err-badge-unauthorized)
+        (map-set user-progress {
+            user: user,
+            requirement-key: requirement-key,
+        } { progress: value })
+        (ok value)
+    )
+)
+
+(define-public (claim-badge (badge-id uint))
+    (let (
+            (badge (unwrap! (get-badge badge-id) err-badge-not-found))
+            (user-count (default-to u0
+                (get count (map-get? user-badge-count { user: tx-sender }))
+            ))
+            (current-earned-count (default-to u0
+                (get count (map-get? badge-earned-count { badge-id: badge-id }))
+            ))
+        )
+        (asserts! (get active badge) err-badge-inactive)
+        (asserts! (not (has-badge tx-sender badge-id)) err-badge-already-earned)
+        (asserts! (can-earn-badge tx-sender badge-id) err-badge-requirement-not-met)
+
+        ;; Mark badge as earned
+        (map-set user-badges {
+            user: tx-sender,
+            badge-id: badge-id,
+        } { earned: true })
+
+        ;; Update user badge count and index
+        (map-set user-badge-count { user: tx-sender } { count: (+ user-count u1) })
+        (map-set user-badge-index {
+            user: tx-sender,
+            index: user-count,
+        } { badge-id: badge-id })
+
+        ;; Update badge earned count
+        (map-set badge-earned-count { badge-id: badge-id } { count: (+ current-earned-count u1) })
+        (ok true)
+    )
+)
+
+;; End Community Achievement Badge System
+;; ===============================================================================
