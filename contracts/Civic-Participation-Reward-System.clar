@@ -323,9 +323,7 @@
     (or
         (is-eq user contract-owner)
         (default-to false
-            (get authorized
-                (map-get? authorized-announcers { user: user })
-            )
+            (get authorized (map-get? authorized-announcers { user: user }))
         )
     )
 )
@@ -342,8 +340,7 @@
 
 (define-read-only (get-announcement-with-status (announcement-id uint))
     (match (get-announcement announcement-id)
-        announcement
-        (some {
+        announcement (some {
             title: (get title announcement),
             content: (get content announcement),
             category: (get category announcement),
@@ -820,12 +817,12 @@
         (content (string-ascii 500))
         (category (string-ascii 30))
     )
-    (let (
-            (announcement (unwrap! (get-announcement announcement-id) err-announcement-not-found))
-        )
+    (let ((announcement (unwrap! (get-announcement announcement-id) err-announcement-not-found)))
         (asserts! (is-eq tx-sender (get creator announcement)) err-unauthorized)
         (asserts! (get is-active announcement) err-announcement-expired)
-        (asserts! (< stacks-block-height (get expiry-block announcement)) err-announcement-expired)
+        (asserts! (< stacks-block-height (get expiry-block announcement))
+            err-announcement-expired
+        )
         (asserts! (> (len title) u0) err-invalid-amount)
         (asserts! (> (len content) u0) err-invalid-amount)
         (asserts! (> (len category) u0) err-invalid-category)
@@ -842,10 +839,8 @@
 )
 
 (define-public (deactivate-announcement (announcement-id uint))
-    (let (
-            (announcement (unwrap! (get-announcement announcement-id) err-announcement-not-found))
-        )
-        (asserts! 
+    (let ((announcement (unwrap! (get-announcement announcement-id) err-announcement-not-found)))
+        (asserts!
             (or
                 (is-eq tx-sender (get creator announcement))
                 (is-eq tx-sender contract-owner)
@@ -932,11 +927,7 @@
 (define-read-only (is-badge-admin (user principal))
     (or
         (is-eq user contract-owner)
-        (default-to false
-            (get authorized
-                (map-get? badge-admins { user: user })
-            )
-        )
+        (default-to false (get authorized (map-get? badge-admins { user: user })))
     )
 )
 
@@ -944,7 +935,10 @@
     (map-get? badges { badge-id: badge-id })
 )
 
-(define-read-only (has-badge (user principal) (badge-id uint))
+(define-read-only (has-badge
+        (user principal)
+        (badge-id uint)
+    )
     (default-to false
         (get earned
             (map-get? user-badges {
@@ -954,19 +948,18 @@
         ))
 )
 
-(define-read-only (can-earn-badge (user principal) (badge-id uint))
+(define-read-only (can-earn-badge
+        (user principal)
+        (badge-id uint)
+    )
     (match (get-badge badge-id)
-        badge
-        (let (
-                (user-prog (default-to u0
-                    (get progress
-                        (map-get? user-progress {
-                            user: user,
-                            requirement-key: (get requirement-key badge),
-                        })
-                    )
-                ))
-            )
+        badge (let ((user-prog (default-to u0
+                (get progress
+                    (map-get? user-progress {
+                        user: user,
+                        requirement-key: (get requirement-key badge),
+                    })
+                ))))
             (and
                 (get active badge)
                 (>= user-prog (get threshold badge))
@@ -978,19 +971,23 @@
 )
 
 (define-read-only (get-badge-stats)
-    {
-        total-badges: (- (var-get next-badge-id) u1),
-    }
+    { total-badges: (- (var-get next-badge-id) u1) }
 )
 
-(define-read-only (get-badges-page (start-id uint) (limit uint))
+(define-read-only (get-badges-page
+        (start-id uint)
+        (limit uint)
+    )
     (if (< start-id (var-get next-badge-id))
         (get-badge start-id)
         none
     )
 )
 
-(define-read-only (get-user-badge-at-index (user principal) (index uint))
+(define-read-only (get-user-badge-at-index
+        (user principal)
+        (index uint)
+    )
     (map-get? user-badge-index {
         user: user,
         index: index,
@@ -1020,9 +1017,7 @@
         (requirement-key (string-utf8 32))
         (threshold uint)
     )
-    (let (
-            (badge-id (var-get next-badge-id))
-        )
+    (let ((badge-id (var-get next-badge-id)))
         (asserts! (is-badge-admin tx-sender) err-badge-unauthorized)
         (asserts! (> (len name) u0) err-badge-invalid-arg)
         (asserts! (> (len requirement-key) u0) err-badge-invalid-arg)
@@ -1049,9 +1044,7 @@
         (threshold (optional uint))
         (active (optional bool))
     )
-    (let (
-            (existing-badge (unwrap! (get-badge badge-id) err-badge-not-found))
-        )
+    (let ((existing-badge (unwrap! (get-badge badge-id) err-badge-not-found)))
         (asserts! (is-badge-admin tx-sender) err-badge-unauthorized)
 
         (map-set badges { badge-id: badge-id } {
@@ -1065,10 +1058,11 @@
     )
 )
 
-(define-public (set-badge-active (badge-id uint) (active bool))
-    (let (
-            (existing-badge (unwrap! (get-badge badge-id) err-badge-not-found))
-        )
+(define-public (set-badge-active
+        (badge-id uint)
+        (active bool)
+    )
+    (let ((existing-badge (unwrap! (get-badge badge-id) err-badge-not-found)))
         (asserts! (is-badge-admin tx-sender) err-badge-unauthorized)
         (map-set badges { badge-id: badge-id }
             (merge existing-badge { active: active })
@@ -1089,8 +1083,7 @@
                         user: user,
                         requirement-key: requirement-key,
                     })
-                )
-            ))
+                )))
             (new-progress (+ current-progress delta))
         )
         (asserts! (is-badge-admin tx-sender) err-badge-unauthorized)
@@ -1099,7 +1092,8 @@
         (map-set user-progress {
             user: user,
             requirement-key: requirement-key,
-        } { progress: new-progress })
+        } { progress: new-progress }
+        )
         (ok new-progress)
     )
 )
@@ -1114,7 +1108,8 @@
         (map-set user-progress {
             user: user,
             requirement-key: requirement-key,
-        } { progress: value })
+        } { progress: value }
+        )
         (ok value)
     )
 )
@@ -1131,20 +1126,24 @@
         )
         (asserts! (get active badge) err-badge-inactive)
         (asserts! (not (has-badge tx-sender badge-id)) err-badge-already-earned)
-        (asserts! (can-earn-badge tx-sender badge-id) err-badge-requirement-not-met)
+        (asserts! (can-earn-badge tx-sender badge-id)
+            err-badge-requirement-not-met
+        )
 
         ;; Mark badge as earned
         (map-set user-badges {
             user: tx-sender,
             badge-id: badge-id,
-        } { earned: true })
+        } { earned: true }
+        )
 
         ;; Update user badge count and index
         (map-set user-badge-count { user: tx-sender } { count: (+ user-count u1) })
         (map-set user-badge-index {
             user: tx-sender,
             index: user-count,
-        } { badge-id: badge-id })
+        } { badge-id: badge-id }
+        )
 
         ;; Update badge earned count
         (map-set badge-earned-count { badge-id: badge-id } { count: (+ current-earned-count u1) })
@@ -1154,3 +1153,176 @@
 
 ;; End Community Achievement Badge System
 ;; ===============================================================================
+
+(define-constant min-comment-interval u10)
+(define-constant err-comment-unauthorized (err u130))
+(define-constant err-comment-not-found (err u131))
+(define-constant err-comment-invalid (err u132))
+(define-constant err-comment-rate-limited (err u133))
+(define-constant err-comment-invalid-activity (err u134))
+
+(define-data-var next-comment-id uint u1)
+
+(define-map comments
+    { comment-id: uint }
+    {
+        activity-id: uint,
+        author: principal,
+        content: (string-utf8 280),
+        created-at: uint,
+        edited-at: uint,
+        is-deleted: bool,
+    }
+)
+
+(define-map activity-comment-count
+    { activity-id: uint }
+    { count: uint }
+)
+
+(define-map activity-comment-index
+    {
+        activity-id: uint,
+        index: uint,
+    }
+    { comment-id: uint }
+)
+
+(define-map user-last-comment-block
+    { user: principal }
+    { block: uint }
+)
+
+(define-read-only (get-comment (comment-id uint))
+    (map-get? comments { comment-id: comment-id })
+)
+
+(define-read-only (get-activity-comment-count (activity-id uint))
+    (default-to u0
+        (get count (map-get? activity-comment-count { activity-id: activity-id }))
+    )
+)
+
+(define-read-only (get-activity-comment-at
+        (activity-id uint)
+        (index uint)
+    )
+    (map-get? activity-comment-index {
+        activity-id: activity-id,
+        index: index,
+    })
+)
+
+(define-read-only (is-comment-author
+        (comment-id uint)
+        (user principal)
+    )
+    (match (get-comment comment-id)
+        c (is-eq (get author c) user)
+        false
+    )
+)
+
+(define-read-only (get-comment-with-status (comment-id uint))
+    (match (get-comment comment-id)
+        c (some {
+            activity-id: (get activity-id c),
+            author: (get author c),
+            content: (get content c),
+            created-at: (get created-at c),
+            edited-at: (get edited-at c),
+            is-deleted: (get is-deleted c),
+        })
+        none
+    )
+)
+
+(define-public (create-comment
+        (activity-id uint)
+        (content (string-utf8 280))
+    )
+    (let (
+            (activity (unwrap! (get-activity activity-id) err-comment-invalid-activity))
+            (comment-id (var-get next-comment-id))
+            (last-block (default-to u0
+                (get block (map-get? user-last-comment-block { user: tx-sender }))
+            ))
+            (count (default-to u0
+                (get count
+                    (map-get? activity-comment-count { activity-id: activity-id })
+                )))
+        )
+        (asserts! (> (len content) u0) err-comment-invalid)
+        (asserts!
+            (or
+                (is-eq last-block u0)
+                (>= (- stacks-block-height last-block) min-comment-interval)
+            )
+            err-comment-rate-limited
+        )
+
+        (map-set comments { comment-id: comment-id } {
+            activity-id: activity-id,
+            author: tx-sender,
+            content: content,
+            created-at: stacks-block-height,
+            edited-at: u0,
+            is-deleted: false,
+        })
+
+        (var-set next-comment-id (+ comment-id u1))
+
+        (map-set activity-comment-count { activity-id: activity-id } { count: (+ count u1) })
+
+        (map-set activity-comment-index {
+            activity-id: activity-id,
+            index: count,
+        } { comment-id: comment-id }
+        )
+
+        (map-set user-last-comment-block { user: tx-sender } { block: stacks-block-height })
+        (ok comment-id)
+    )
+)
+
+(define-public (edit-comment
+        (comment-id uint)
+        (content (string-utf8 280))
+    )
+    (let ((c (unwrap! (get-comment comment-id) err-comment-not-found)))
+        (asserts! (> (len content) u0) err-comment-invalid)
+        (asserts! (not (get is-deleted c)) err-comment-not-found)
+        (asserts! (is-eq (get author c) tx-sender) err-comment-unauthorized)
+
+        (map-set comments { comment-id: comment-id }
+            (merge c {
+                content: content,
+                edited-at: stacks-block-height,
+            })
+        )
+        (ok true)
+    )
+)
+
+(define-public (delete-comment (comment-id uint))
+    (let (
+            (c (unwrap! (get-comment comment-id) err-comment-not-found))
+            (activity (unwrap! (get-activity (get activity-id c))
+                err-comment-invalid-activity
+            ))
+        )
+        (asserts!
+            (or
+                (is-eq tx-sender (get author c))
+                (is-eq tx-sender (get creator activity))
+                (is-eq tx-sender contract-owner)
+            )
+            err-comment-unauthorized
+        )
+
+        (map-set comments { comment-id: comment-id }
+            (merge c { is-deleted: true })
+        )
+        (ok true)
+    )
+)
